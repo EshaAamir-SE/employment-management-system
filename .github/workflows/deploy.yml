@@ -1,9 +1,10 @@
-name: Build and Deploy to Minikube
+name: Build and Deploy to Production
 
 on:
   push:
     branches:
       - main
+      - master
 
 jobs:
   build-deploy:
@@ -15,25 +16,101 @@ jobs:
       - name: Set up Docker to use Minikube's environment
         run: |
           echo "Configuring Docker to use Minikube's daemon..."
-          eval $(minikube docker-env)
+          try {
+            & minikube -p minikube docker-env --shell powershell | Invoke-Expression
+            echo "✅ Docker configured to use Minikube's daemon"
+          } catch {
+            echo "❌ Error configuring Docker: $_"
+            exit 1
+          }
 
-      - name: Build Docker image
+      - name: Build Docker images
         run: |
-          docker build -t i222473/employee-backend:latest ./app/backend
-          docker build -t i222473/employee-frontend:latest ./app/frontend
+          echo "Building Docker images..."
+          try {
+            docker build -t employee-backend:latest ./app/backend
+            docker build -t employee-frontend:latest ./app/frontend
+            echo "✅ Docker images built successfully"
+          } catch {
+            echo "❌ Error building Docker images: $_"
+            exit 1
+          }
+
+      - name: Tag images for Docker Hub
+        run: |
+          echo "Tagging images for Docker Hub..."
+          docker tag employee-backend:latest i222473/employee-backend:latest
+          docker tag employee-frontend:latest i222473/employee-frontend:latest
 
       - name: Login to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Push Docker image to Docker Hub
         run: |
-          docker push i222473/employee-backend:latest
-          docker push i222473/employee-frontend:latest
+          try {
+            echo "Logging in to Docker Hub..."
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+            echo "✅ Logged in to Docker Hub successfully"
+          } catch {
+            echo "❌ Error logging in to Docker Hub: $_"
+            exit 1
+          }
 
-      - name: Deploy to Minikube
+      - name: Push Docker images to Docker Hub
         run: |
-          kubectl apply -f kubernetes/namespace.yaml
-          kubectl apply -f kubernetes/backend-deployment.yaml
-          kubectl apply -f kubernetes/backend-service.yaml
-          kubectl apply -f kubernetes/frontend-deployment.yaml
-          kubectl apply -f kubernetes/frontend-service.yaml
+          try {
+            echo "Pushing images to Docker Hub..."
+            docker push i222473/employee-backend:latest
+            docker push i222473/employee-frontend:latest
+            echo "✅ Images pushed to Docker Hub successfully"
+          } catch {
+            echo "❌ Error pushing images to Docker Hub: $_"
+            exit 1
+          }
+
+      - name: Deploy to Kubernetes
+        run: |
+          try {
+            echo "Deploying to Kubernetes..."
+            kubectl apply -f kubernetes/namespace.yaml
+            
+            # Update the deployment files to use the Docker Hub images
+            (Get-Content kubernetes/backend-deployment.yaml) -replace 'image:.*', 'image: i222473/employee-backend:latest' | Set-Content kubernetes/backend-deployment.yaml
+            (Get-Content kubernetes/frontend-deployment.yaml) -replace 'image:.*', 'image: i222473/employee-frontend:latest' | Set-Content kubernetes/frontend-deployment.yaml
+            
+            kubectl apply -f kubernetes/backend-deployment.yaml
+            kubectl apply -f kubernetes/backend-service.yaml
+            kubectl apply -f kubernetes/frontend-deployment.yaml
+            kubectl apply -f kubernetes/frontend-service.yaml
+            echo "✅ Deployment completed successfully"
+          } catch {
+            echo "❌ Error during deployment: $_"
+            exit 1
+          }
+          
+      - name: Verify deployment
+        run: |
+          echo "Checking deployment status..."
+          kubectl get pods -n emp-management
+          kubectl get services -n emp-management
+          
+          # Wait for pods to be ready
+          echo "Waiting for pods to be ready..."
+          $maxRetries = 10
+          $retryCount = 0
+          $allReady = $false
+          
+          while (-not $allReady -and $retryCount -lt $maxRetries) {
+            $pods = kubectl get pods -n emp-management -o jsonpath='{.items[*].status.containerStatuses[*].ready}' | Select-String -Pattern "false" -Quiet
+            if (-not $pods) {
+              $allReady = $true
+              echo "✅ All pods are ready!"
+            } else {
+              $retryCount++
+              echo "⏳ Waiting for pods to be ready... Attempt $retryCount of $maxRetries"
+              Start-Sleep -Seconds 10
+            }
+          }
+          
+          if (-not $allReady) {
+            echo "❌ Pods did not become ready within the timeout period"
+            kubectl describe pods -n emp-management
+            exit 1
+          }
