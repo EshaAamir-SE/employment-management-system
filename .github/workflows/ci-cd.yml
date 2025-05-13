@@ -1,0 +1,85 @@
+name: Build and Deploy to Minikube
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-deploy:
+    runs-on: self-hosted
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Debug Files and Paths
+      run: |
+        echo "Current working directory: $(Get-Location)"
+        echo "Repository root: ${{ github.workspace }}"
+        echo "Checking backend Dockerfile:"
+        if (Test-Path "${{ github.workspace }}/app/backend/Dockerfile") {
+          echo "✅ Backend Dockerfile exists"
+        } else {
+          echo "❌ Backend Dockerfile NOT found"
+          echo "Files in backend directory:"
+          Get-ChildItem "${{ github.workspace }}/app/backend" -Force
+        }
+        
+        echo "Checking frontend Dockerfile:"
+        if (Test-Path "${{ github.workspace }}/app/frontend/Dockerfile") {
+          echo "✅ Frontend Dockerfile exists"
+        } else {
+          echo "❌ Frontend Dockerfile NOT found"
+          echo "Files in frontend directory:"
+          Get-ChildItem "${{ github.workspace }}/app/frontend" -Force
+        }
+    
+    - name: Configure Minikube Docker environment
+      run: |
+        echo "Setting up minikube environment..."
+        & minikube -p minikube docker-env --shell powershell | Invoke-Expression
+        
+    - name: Build Docker images directly in Minikube
+      run: |
+        # Navigate to repository root to ensure paths are correct
+        cd "${{ github.workspace }}"
+        
+        # Build backend image with full paths
+        echo "Building backend image..."
+        docker build -t employee-backend:latest -f "${{ github.workspace }}/app/backend/Dockerfile" "${{ github.workspace }}/app/backend"
+        
+        # Build frontend image with full paths
+        echo "Building frontend image..."
+        docker build -t employee-frontend:latest -f "${{ github.workspace }}/app/frontend/Dockerfile" "${{ github.workspace }}/app/frontend"
+        
+    - name: Update Kubernetes files for local images
+      run: |
+        # Navigate to repository root
+        cd "${{ github.workspace }}"
+        
+        # Update image names in deployment files to use local images
+        echo "Updating Kubernetes deployment files..."
+        (Get-Content kubernetes/backend-deployment.yaml) -replace 'i222473/employee-backend:latest', 'employee-backend:latest' | Set-Content kubernetes/backend-deployment.yaml
+        (Get-Content kubernetes/frontend-deployment.yaml) -replace 'i222473/employee-frontend:latest', 'employee-frontend:latest' | Set-Content kubernetes/frontend-deployment.yaml
+        
+    - name: Deploy to Minikube
+      run: |
+        # Navigate to repository root
+        cd "${{ github.workspace }}"
+        
+        # Apply Kubernetes manifests
+        echo "Deploying to Kubernetes..."
+        kubectl apply -f kubernetes/namespace.yaml
+        kubectl apply -f kubernetes/backend-deployment.yaml
+        kubectl apply -f kubernetes/backend-service.yaml
+        kubectl apply -f kubernetes/frontend-deployment.yaml
+        kubectl apply -f kubernetes/frontend-service.yaml
+        
+    - name: Verify deployment
+      run: |
+        echo "Checking deployment status..."
+        kubectl get pods -n emp-management
+        kubectl get services -n emp-management
+        kubectl get deployments -n emp-management -o wide
