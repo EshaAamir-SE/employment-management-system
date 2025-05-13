@@ -50,6 +50,53 @@ jobs:
           exit 1
         }
     
+    - name: Tag images for Docker Hub
+      if: github.event_name == 'push'
+      run: |
+        echo "Tagging images for Docker Hub..."
+        docker tag employee-backend:latest i222473/employee-backend:latest
+        docker tag employee-frontend:latest i222473/employee-frontend:latest
+
+    - name: Login to Docker Hub
+      if: github.event_name == 'push'
+      run: |
+        echo "Logging in to Docker Hub..."
+        $loginSuccess = $false
+        try {
+          # Store the result of docker login in a variable
+          $loginResult = docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
+          
+          # Check if login was successful
+          if ($loginResult -like "*Login Succeeded*") {
+            echo "✅ Logged in to Docker Hub successfully"
+            $loginSuccess = $true
+          } else {
+            echo "❌ Docker login did not succeed. Result: $loginResult"
+          }
+        } catch {
+          echo "❌ Error logging in to Docker Hub: $_"
+        }
+        
+        # Exit with error if login failed
+        if (-not $loginSuccess) {
+          echo "Docker Hub login failed. Please check your credentials in GitHub Secrets."
+          echo "Make sure DOCKER_USERNAME and DOCKER_PASSWORD are correctly set in repository secrets."
+          exit 1
+        }
+
+    - name: Push Docker images to Docker Hub
+      if: github.event_name == 'push'
+      run: |
+        try {
+          echo "Pushing images to Docker Hub..."
+          docker push i222473/employee-backend:latest
+          docker push i222473/employee-frontend:latest
+          echo "✅ Images pushed to Docker Hub successfully"
+        } catch {
+          echo "❌ Error pushing images to Docker Hub: $_"
+          exit 1
+        }
+    
     - name: Deploy to Kubernetes
       if: github.event_name == 'push'
       run: |

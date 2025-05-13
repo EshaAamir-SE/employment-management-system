@@ -45,12 +45,27 @@ jobs:
 
       - name: Login to Docker Hub
         run: |
+          echo "Logging in to Docker Hub..."
+          $loginSuccess = $false
           try {
-            echo "Logging in to Docker Hub..."
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-            echo "✅ Logged in to Docker Hub successfully"
+            # Store the result of docker login in a variable
+            $loginResult = docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
+            
+            # Check if login was successful
+            if ($loginResult -like "*Login Succeeded*") {
+              echo "✅ Logged in to Docker Hub successfully"
+              $loginSuccess = $true
+            } else {
+              echo "❌ Docker login did not succeed. Result: $loginResult"
+            }
           } catch {
             echo "❌ Error logging in to Docker Hub: $_"
+          }
+          
+          # Exit with error if login failed
+          if (-not $loginSuccess) {
+            echo "Docker Hub login failed. Please check your credentials in GitHub Secrets."
+            echo "Make sure DOCKER_USERNAME and DOCKER_PASSWORD are correctly set in repository secrets."
             exit 1
           }
 
